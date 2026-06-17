@@ -1,5 +1,6 @@
 const STORAGE_KEY = "reserva-sala-reunioes-v1";
 const CONFIG_KEY = "reserva-sala-reunioes-config-v1";
+const CANCEL_CODES_KEY = "reserva-sala-reunioes-cancel-codes-v1";
 const TABLE_NAME = "meeting_room_reservations";
 
 const state = {
@@ -58,9 +59,15 @@ form.addEventListener("submit", async (event) => {
   const data = Object.fromEntries(new FormData(form));
   const start = new Date(`${data.date}T${data.startTime}`);
   const end = new Date(`${data.date}T${data.endTime}`);
+  const cancelCode = String(data.cancelCode || "").trim();
 
   if (end <= start) {
     showMessage("A hora final precisa ser maior que a hora inicial.");
+    return;
+  }
+
+  if (cancelCode.length < 4) {
+    showMessage("Crie um codigo de cancelamento com pelo menos 4 caracteres.");
     return;
   }
 
@@ -73,14 +80,16 @@ form.addEventListener("submit", async (event) => {
   }
 
   try {
-    await createBooking({
+    const created = await createBooking({
       owner: data.owner.trim(),
       reason: data.reason.trim(),
       date: data.date,
       start: start.toISOString(),
       end: end.toISOString(),
       createdAt: new Date().toISOString(),
+      cancelCode,
     });
+    rememberCancelCode(created.id, cancelCode);
   } catch (error) {
     showMessage(`Nao foi possivel salvar no Supabase: ${cleanError(error.message)}`);
     return;
@@ -97,11 +106,20 @@ form.addEventListener("submit", async (event) => {
 calendar.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-delete]");
   if (!button) return;
+  const knownCode = getRememberedCancelCode(button.dataset.delete);
+  const cancelCode = knownCode || window.prompt("Digite o codigo de cancelamento desta reserva:");
+
+  if (!cancelCode) {
+    showMessage("Cancelamento interrompido. Informe o codigo para cancelar.");
+    return;
+  }
+
   try {
-    await deleteBooking(button.dataset.delete);
+    await deleteBooking(button.dataset.delete, cancelCode);
+    forgetCancelCode(button.dataset.delete);
     await refreshBookings();
   } catch (error) {
-    showMessage(`Nao foi possivel cancelar: ${cleanError(error.message)}`);
+    showMessage(`Nao foi possivel cancelar. Verifique o codigo informado.`);
   }
 });
 
@@ -317,19 +335,30 @@ async function refreshBookings(showErrors = true) {
 }
 
 async function listBookings() {
-  return supabaseRequest(`/${TABLE_NAME}?select=*&order=start.asc`);
+  return supabaseRequest(`/${TABLE_NAME}?select=id,owner,reason,date,start,end,created_at&order=start.asc`);
 }
 
 async function createBooking(booking) {
-  return supabaseRequest(`/${TABLE_NAME}`, {
+  return supabaseRpc("create_meeting_reservation", {
     method: "POST",
-    body: JSON.stringify(toDatabaseBooking(booking)),
+    body: JSON.stringify({
+      p_owner: booking.owner,
+      p_reason: booking.reason,
+      p_date: booking.date,
+      p_start: booking.start,
+      p_end: booking.end,
+      p_cancel_code: booking.cancelCode,
+    }),
   });
 }
 
-async function deleteBooking(id) {
-  return supabaseRequest(`/${TABLE_NAME}?id=eq.${encodeURIComponent(id)}`, {
-    method: "DELETE",
+async function deleteBooking(id, cancelCode) {
+  return supabaseRpc("cancel_meeting_reservation", {
+    method: "POST",
+    body: JSON.stringify({
+      p_id: id,
+      p_cancel_code: cancelCode,
+    }),
   });
 }
 
@@ -353,6 +382,28 @@ async function supabaseRequest(path, options = {}) {
   }
 
   return payload || [];
+}
+
+async function supabaseRpc(functionName, options = {}) {
+  const response = await fetch(`${state.config.supabaseUrl}/rest/v1/rpc/${functionName}`, {
+    method: options.method || "POST",
+    headers: {
+      apikey: state.config.supabaseKey,
+      Authorization: `Bearer ${state.config.supabaseKey}`,
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+    },
+    body: options.body,
+  });
+
+  const text = await response.text();
+  const payload = text ? JSON.parse(text) : null;
+
+  if (!response.ok) {
+    throw new Error(payload?.message || payload?.details || text || `HTTP ${response.status}`);
+  }
+
+  return Array.isArray(payload) ? payload[0] : payload;
 }
 
 function toDatabaseBooking(booking) {
@@ -410,6 +461,31 @@ function loadLocalSample() {
 
 function cleanError(message) {
   return String(message || "erro desconhecido").replace(/["{}[\]]/g, "").slice(0, 180);
+}
+
+function getCancelCodeMap() {
+  try {
+    return JSON.parse(localStorage.getItem(CANCEL_CODES_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function rememberCancelCode(id, code) {
+  if (!id) return;
+  const codes = getCancelCodeMap();
+  codes[id] = code;
+  localStorage.setItem(CANCEL_CODES_KEY, JSON.stringify(codes));
+}
+
+function getRememberedCancelCode(id) {
+  return getCancelCodeMap()[id] || "";
+}
+
+function forgetCancelCode(id) {
+  const codes = getCancelCodeMap();
+  delete codes[id];
+  localStorage.setItem(CANCEL_CODES_KEY, JSON.stringify(codes));
 }
 
 function movePeriod(direction) {
