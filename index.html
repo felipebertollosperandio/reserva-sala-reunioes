@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Reserva de Sala de Reuniões</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">L</span>
+        <div>
+          <h1>Reserva de Sala de Reuniões</h1>
+          <p>Agenda compartilhada para organizar o uso da sala.</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button type="button" class="share-button" id="syncButton">Configurar banco</button>
+        <div class="room-status" id="roomStatus">
+          <span class="status-dot"></span>
+          <div>
+            <strong id="statusLabel">Livre</strong>
+            <small id="statusDetail">Sem reunião em andamento</small>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main class="app-shell">
+      <section class="controls-band">
+        <div class="calendar-controls">
+          <button type="button" class="icon-button" id="prevPeriod" aria-label="Período anterior">&lt;</button>
+          <div>
+            <h2 id="periodTitle">Calendário</h2>
+            <p id="periodSubtitle">Semana atual</p>
+          </div>
+          <button type="button" class="icon-button" id="nextPeriod" aria-label="Próximo período">&gt;</button>
+        </div>
+
+        <div class="segmented" role="tablist" aria-label="Modo de calendário">
+          <button type="button" class="active" data-view="week">Semana</button>
+          <button type="button" data-view="month">Mês</button>
+        </div>
+      </section>
+
+      <section class="sync-panel" id="syncPanel" aria-label="Configuração do banco compartilhado">
+        <div>
+          <h2>Banco compartilhado</h2>
+          <p id="syncStatus">Informe os dados públicos do Supabase para sincronizar a agenda com toda a equipe.</p>
+        </div>
+        <form id="syncForm">
+          <label>
+            Supabase URL
+            <input id="supabaseUrl" name="supabaseUrl" type="url" placeholder="https://seu-projeto.supabase.co" />
+          </label>
+          <label>
+            Publishable key ou anon key
+            <input id="supabaseKey" name="supabaseKey" type="password" placeholder="Chave pública do projeto" />
+          </label>
+          <button type="submit" class="primary-button">Salvar e sincronizar</button>
+        </form>
+      </section>
+
+      <section class="workspace">
+        <aside class="booking-panel" aria-label="Cadastro de reserva">
+          <h2>Nova reserva</h2>
+          <form id="bookingForm">
+            <label>
+              Nome do responsável
+              <input id="owner" name="owner" type="text" placeholder="Ex.: Ana Souza" required />
+            </label>
+            <label>
+              Motivo da reunião
+              <input id="reason" name="reason" type="text" placeholder="Ex.: Alinhamento comercial" required />
+            </label>
+            <label>
+              Data
+              <input id="date" name="date" type="date" required />
+            </label>
+            <div class="time-grid">
+              <label>
+                Hora inicial
+                <input id="startTime" name="startTime" type="time" required />
+              </label>
+              <label>
+                Hora final
+                <input id="endTime" name="endTime" type="time" required />
+              </label>
+            </div>
+            <p class="form-message" id="formMessage" role="status" aria-live="polite"></p>
+            <button type="submit" class="primary-button">Agendar sala</button>
+          </form>
+        </aside>
+
+        <section class="calendar-surface" aria-label="Calendário de reservas">
+          <div id="calendar" class="calendar week-view"></div>
+        </section>
+
+        <aside class="dashboard" aria-label="Dashboard">
+          <div class="metric-strip">
+            <article>
+              <span>Taxa de ocupação</span>
+              <strong id="occupancyRate">0%</strong>
+            </article>
+            <article>
+              <span>Reservas no mês</span>
+              <strong id="monthTotal">0</strong>
+            </article>
+          </div>
+
+          <section class="dash-block">
+            <h2>Próximas reuniões</h2>
+            <div id="upcomingList" class="list"></div>
+          </section>
+
+          <section class="dash-block">
+            <h2>Histórico de utilização</h2>
+            <div id="historyList" class="list compact"></div>
+          </section>
+        </aside>
+      </section>
+    </main>
+
+    <template id="bookingTemplate">
+      <article class="booking-card">
+        <strong></strong>
+        <span></span>
+        <small></small>
+      </article>
+    </template>
+
+    <script src="./config.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

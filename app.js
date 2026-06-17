@@ -1,0 +1,485 @@
+const STORAGE_KEY = "reserva-sala-reunioes-v1";
+const CONFIG_KEY = "reserva-sala-reunioes-config-v1";
+const TABLE_NAME = "meeting_room_reservations";
+
+const state = {
+  view: "week",
+  cursor: startOfWeek(new Date()),
+  bookings: [],
+  config: loadConfig(),
+  online: false,
+};
+
+const calendar = document.getElementById("calendar");
+const periodTitle = document.getElementById("periodTitle");
+const periodSubtitle = document.getElementById("periodSubtitle");
+const form = document.getElementById("bookingForm");
+const formMessage = document.getElementById("formMessage");
+const roomStatus = document.getElementById("roomStatus");
+const statusLabel = document.getElementById("statusLabel");
+const statusDetail = document.getElementById("statusDetail");
+const upcomingList = document.getElementById("upcomingList");
+const historyList = document.getElementById("historyList");
+const occupancyRate = document.getElementById("occupancyRate");
+const monthTotal = document.getElementById("monthTotal");
+const syncButton = document.getElementById("syncButton");
+const syncPanel = document.getElementById("syncPanel");
+const syncForm = document.getElementById("syncForm");
+const syncStatus = document.getElementById("syncStatus");
+
+document.getElementById("date").valueAsDate = new Date();
+document.getElementById("startTime").value = "09:00";
+document.getElementById("endTime").value = "10:00";
+document.getElementById("supabaseUrl").value = state.config.supabaseUrl || "";
+document.getElementById("supabaseKey").value = state.config.supabaseKey || "";
+
+document.getElementById("prevPeriod").addEventListener("click", () => movePeriod(-1));
+document.getElementById("nextPeriod").addEventListener("click", () => movePeriod(1));
+syncButton.addEventListener("click", () => syncPanel.classList.toggle("open"));
+syncForm.addEventListener("submit", saveDatabaseConfig);
+
+document.querySelectorAll("[data-view]").forEach((button) => {
+  button.addEventListener("click", () => {
+    state.view = button.dataset.view;
+    document.querySelectorAll("[data-view]").forEach((item) => item.classList.toggle("active", item === button));
+    state.cursor = state.view === "week" ? startOfWeek(state.cursor) : startOfMonth(state.cursor);
+    render();
+  });
+});
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!isConfigured()) {
+    showMessage("Configure o Supabase antes de agendar.");
+    syncPanel.classList.add("open");
+    return;
+  }
+
+  const data = Object.fromEntries(new FormData(form));
+  const start = new Date(`${data.date}T${data.startTime}`);
+  const end = new Date(`${data.date}T${data.endTime}`);
+
+  if (end <= start) {
+    showMessage("A hora final precisa ser maior que a hora inicial.");
+    return;
+  }
+
+  await refreshBookings(false);
+
+  const conflict = findConflict(data.date, start, end);
+  if (conflict) {
+    showMessage(`Conflito com ${conflict.owner}, das ${formatTime(conflict.start)} as ${formatTime(conflict.end)}.`);
+    return;
+  }
+
+  try {
+    await createBooking({
+      owner: data.owner.trim(),
+      reason: data.reason.trim(),
+      date: data.date,
+      start: start.toISOString(),
+      end: end.toISOString(),
+      createdAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    showMessage(`Nao foi possivel salvar no Supabase: ${cleanError(error.message)}`);
+    return;
+  }
+
+  form.reset();
+  document.getElementById("date").value = data.date;
+  document.getElementById("startTime").value = data.endTime;
+  document.getElementById("endTime").value = addMinutes(data.endTime, 60);
+  showMessage("Reserva criada com sucesso.", true);
+  await refreshBookings();
+});
+
+calendar.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-delete]");
+  if (!button) return;
+  try {
+    await deleteBooking(button.dataset.delete);
+    await refreshBookings();
+  } catch (error) {
+    showMessage(`Nao foi possivel cancelar: ${cleanError(error.message)}`);
+  }
+});
+
+setInterval(updateRoomStatus, 30000);
+setInterval(() => refreshBookings(false), 60000);
+boot();
+
+function render() {
+  state.bookings.sort((a, b) => new Date(a.start) - new Date(b.start));
+  calendar.className = `calendar ${state.view}-view`;
+  if (state.view === "week") renderWeek();
+  if (state.view === "month") renderMonth();
+  renderDashboard();
+  updateRoomStatus();
+}
+
+function renderWeek() {
+  const start = startOfWeek(state.cursor);
+  const days = Array.from({ length: 7 }, (_, index) => addDays(start, index));
+  periodTitle.textContent = `${formatDate(days[0], "short")} - ${formatDate(days[6], "short")}`;
+  periodSubtitle.textContent = "Visao semanal";
+  calendar.innerHTML = "";
+  const grid = create("div", "week-grid");
+
+  days.forEach((day) => {
+    const column = create("section", "day-column");
+    column.append(dayHeader(day));
+    const body = create("div", "day-body");
+    bookingsForDate(day).forEach((booking) => body.append(bookingCard(booking, true)));
+    if (!body.children.length) body.append(emptyState("Sem reservas"));
+    column.append(body);
+    grid.append(column);
+  });
+
+  calendar.append(grid);
+}
+
+function renderMonth() {
+  const start = startOfMonth(state.cursor);
+  const firstCell = startOfWeek(start);
+  const days = Array.from({ length: 42 }, (_, index) => addDays(firstCell, index));
+  periodTitle.textContent = start.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+  periodSubtitle.textContent = "Visao mensal";
+  calendar.innerHTML = "";
+  const grid = create("div", "month-grid");
+
+  days.forEach((day) => {
+    const cell = create("section", `month-day ${day.getMonth() !== start.getMonth() ? "outside" : ""}`);
+    cell.append(dayHeader(day));
+    const body = create("div", "day-body");
+    const dayBookings = bookingsForDate(day);
+    dayBookings.slice(0, 3).forEach((booking) => body.append(bookingCard(booking, false)));
+    if (dayBookings.length > 3) body.append(emptyState(`+${dayBookings.length - 3} reserva(s)`));
+    cell.append(body);
+    grid.append(cell);
+  });
+
+  calendar.append(grid);
+}
+
+function renderDashboard() {
+  const now = new Date();
+  const upcoming = state.bookings.filter((booking) => new Date(booking.end) >= now).slice(0, 5);
+  const history = state.bookings.filter((booking) => new Date(booking.end) < now).reverse().slice(0, 5);
+
+  upcomingList.innerHTML = "";
+  historyList.innerHTML = "";
+  upcoming.forEach((booking) => upcomingList.append(bookingCard(booking, false)));
+  history.forEach((booking) => historyList.append(bookingCard(booking, false)));
+  if (!upcoming.length) upcomingList.append(emptyState("Nenhuma proxima reuniao."));
+  if (!history.length) historyList.append(emptyState("Nenhuma reuniao finalizada."));
+
+  const monthStart = startOfMonth(new Date());
+  const monthEnd = addMonths(monthStart, 1);
+  const monthBookings = state.bookings.filter((booking) => {
+    const start = new Date(booking.start);
+    return start >= monthStart && start < monthEnd;
+  });
+  const usedMinutes = monthBookings.reduce((total, booking) => {
+    return total + (new Date(booking.end) - new Date(booking.start)) / 60000;
+  }, 0);
+  const businessMinutes = businessDaysInMonth(monthStart) * 10 * 60;
+  occupancyRate.textContent = `${Math.min(100, Math.round((usedMinutes / businessMinutes) * 100))}%`;
+  monthTotal.textContent = monthBookings.length;
+}
+
+function updateRoomStatus() {
+  const now = new Date();
+  const active = state.bookings.find((booking) => new Date(booking.start) <= now && new Date(booking.end) > now);
+  const next = state.bookings.find((booking) => new Date(booking.start) > now);
+  roomStatus.classList.remove("busy", "next");
+
+  if (active) {
+    roomStatus.classList.add("busy");
+    statusLabel.textContent = "Ocupada";
+    statusDetail.textContent = `${active.reason} ate ${formatTime(active.end)}`;
+    return;
+  }
+
+  if (next) {
+    roomStatus.classList.add("next");
+    statusLabel.textContent = "Livre";
+    statusDetail.textContent = `Proxima reuniao as ${formatTime(next.start)}`;
+    return;
+  }
+
+  statusLabel.textContent = "Livre";
+  statusDetail.textContent = "Sem proximas reunioes";
+}
+
+function bookingCard(booking, removable) {
+  const card = document.getElementById("bookingTemplate").content.firstElementChild.cloneNode(true);
+  card.querySelector("strong").textContent = booking.reason;
+  card.querySelector("span").textContent = `${formatTime(booking.start)} - ${formatTime(booking.end)} - ${booking.owner}`;
+  card.querySelector("small").textContent = formatDate(new Date(booking.start), "long");
+  if (removable && !String(booking.id).startsWith("sample-")) {
+    const button = create("button", "delete-button");
+    button.type = "button";
+    button.dataset.delete = booking.id;
+    button.textContent = "Cancelar";
+    card.append(button);
+  }
+  return card;
+}
+
+function dayHeader(day) {
+  const header = create("div", "day-header");
+  const title = create("strong");
+  title.textContent = day.toLocaleDateString("pt-BR", { weekday: "short" }).replace(".", "");
+  const subtitle = create("span");
+  subtitle.textContent = day.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
+  header.append(title, subtitle);
+  return header;
+}
+
+function bookingsForDate(day) {
+  const date = toDateInput(day);
+  return state.bookings.filter((booking) => booking.date === date);
+}
+
+function showMessage(message, success = false) {
+  formMessage.textContent = message;
+  formMessage.classList.toggle("success", success);
+}
+
+function loadConfig() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(CONFIG_KEY)) || {};
+    const bundled = window.RESERVA_DB || {};
+    return {
+      supabaseUrl: saved.supabaseUrl || bundled.supabaseUrl || "",
+      supabaseKey: saved.supabaseKey || bundled.supabaseKey || "",
+    };
+  } catch {
+    return window.RESERVA_DB || {};
+  }
+}
+
+function saveConfig() {
+  localStorage.setItem(CONFIG_KEY, JSON.stringify(state.config));
+}
+
+async function saveDatabaseConfig(event) {
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(syncForm));
+  state.config = {
+    supabaseUrl: data.supabaseUrl.trim().replace(/\/$/, ""),
+    supabaseKey: data.supabaseKey.trim(),
+  };
+  saveConfig();
+  await refreshBookings();
+}
+
+async function boot() {
+  if (!isConfigured()) {
+    state.bookings = loadLocalSample();
+    syncPanel.classList.add("open");
+    syncStatus.textContent = "Supabase ainda nao configurado. Os dados exibidos abaixo sao apenas exemplos.";
+    syncButton.textContent = "Configurar Supabase";
+    render();
+    return;
+  }
+
+  await refreshBookings();
+}
+
+async function refreshBookings(showErrors = true) {
+  if (!isConfigured()) {
+    state.online = false;
+    render();
+    return;
+  }
+
+  syncButton.textContent = "Sincronizando...";
+  try {
+    state.bookings = await listBookings();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.bookings));
+    state.online = true;
+    syncStatus.textContent = `Agenda sincronizada com ${state.bookings.length} reserva(s).`;
+    syncButton.textContent = "Supabase conectado";
+    syncPanel.classList.remove("open");
+  } catch (error) {
+    state.online = false;
+    state.bookings = loadCachedBookings();
+    if (!state.bookings.length) state.bookings = loadLocalSample();
+    if (showErrors) {
+      syncPanel.classList.add("open");
+      syncStatus.textContent = `Falha ao conectar ao Supabase: ${cleanError(error.message)}`;
+    }
+    syncButton.textContent = "Revisar Supabase";
+  }
+  render();
+}
+
+async function listBookings() {
+  return supabaseRequest(`/${TABLE_NAME}?select=*&order=start.asc`);
+}
+
+async function createBooking(booking) {
+  return supabaseRequest(`/${TABLE_NAME}`, {
+    method: "POST",
+    body: JSON.stringify(toDatabaseBooking(booking)),
+  });
+}
+
+async function deleteBooking(id) {
+  return supabaseRequest(`/${TABLE_NAME}?id=eq.${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+async function supabaseRequest(path, options = {}) {
+  const response = await fetch(`${state.config.supabaseUrl}/rest/v1${path}`, {
+    method: options.method || "GET",
+    headers: {
+      apikey: state.config.supabaseKey,
+      Authorization: `Bearer ${state.config.supabaseKey}`,
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+    },
+    body: options.body,
+  });
+
+  const text = await response.text();
+  const payload = text ? JSON.parse(text) : null;
+
+  if (!response.ok) {
+    throw new Error(payload?.message || payload?.details || text || `HTTP ${response.status}`);
+  }
+
+  return payload || [];
+}
+
+function toDatabaseBooking(booking) {
+  return {
+    owner: booking.owner,
+    reason: booking.reason,
+    date: booking.date,
+    start: booking.start,
+    end: booking.end,
+    created_at: booking.createdAt,
+  };
+}
+
+function findConflict(date, start, end) {
+  return state.bookings.find((booking) => {
+    if (booking.date !== date) return false;
+    return start < new Date(booking.end) && end > new Date(booking.start);
+  });
+}
+
+function isConfigured() {
+  return Boolean(state.config.supabaseUrl && state.config.supabaseKey);
+}
+
+function loadCachedBookings() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+  } catch {
+    return [];
+  }
+}
+
+function loadLocalSample() {
+  const cached = loadCachedBookings();
+  if (cached.length) return cached;
+  const today = new Date();
+  return [
+    ["09:00", "10:00", "Marina Costa", "Ritual semanal"],
+    ["14:30", "15:30", "Joao Lima", "Planejamento de frota"],
+    ["11:00", "12:00", "Bianca Alves", "Reuniao comercial"],
+  ].map(([startTime, endTime, owner, reason], index) => {
+    const day = addDays(today, index);
+    const date = toDateInput(day);
+    return {
+      id: `sample-${index}`,
+      owner,
+      reason,
+      date,
+      start: new Date(`${date}T${startTime}`).toISOString(),
+      end: new Date(`${date}T${endTime}`).toISOString(),
+      createdAt: new Date().toISOString(),
+    };
+  });
+}
+
+function cleanError(message) {
+  return String(message || "erro desconhecido").replace(/["{}[\]]/g, "").slice(0, 180);
+}
+
+function movePeriod(direction) {
+  state.cursor = state.view === "week" ? addDays(state.cursor, direction * 7) : addMonths(state.cursor, direction);
+  render();
+}
+
+function startOfWeek(date) {
+  const result = new Date(date);
+  const day = result.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  result.setDate(result.getDate() + diff);
+  result.setHours(0, 0, 0, 0);
+  return result;
+}
+
+function startOfMonth(date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function addDays(date, amount) {
+  const result = new Date(date);
+  result.setDate(result.getDate() + amount);
+  return result;
+}
+
+function addMonths(date, amount) {
+  const result = new Date(date);
+  result.setMonth(result.getMonth() + amount);
+  return result;
+}
+
+function addMinutes(time, amount) {
+  const [hours, minutes] = time.split(":").map(Number);
+  const date = new Date(2026, 0, 1, hours, minutes + amount);
+  return date.toTimeString().slice(0, 5);
+}
+
+function toDateInput(date) {
+  const local = new Date(date);
+  local.setMinutes(local.getMinutes() - local.getTimezoneOffset());
+  return local.toISOString().slice(0, 10);
+}
+
+function formatTime(value) {
+  return new Date(value).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatDate(value, style) {
+  const options = style === "long" ? { weekday: "short", day: "2-digit", month: "short" } : { day: "2-digit", month: "short" };
+  return value.toLocaleDateString("pt-BR", options).replace(".", "");
+}
+
+function businessDaysInMonth(monthStart) {
+  const monthEnd = addMonths(monthStart, 1);
+  let count = 0;
+  for (let day = new Date(monthStart); day < monthEnd; day = addDays(day, 1)) {
+    if (day.getDay() !== 0 && day.getDay() !== 6) count += 1;
+  }
+  return count;
+}
+
+function emptyState(text) {
+  const node = create("div", "empty");
+  node.textContent = text;
+  return node;
+}
+
+function create(tag, className = "") {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  return node;
+}
