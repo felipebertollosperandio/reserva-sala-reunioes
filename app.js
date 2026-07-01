@@ -40,7 +40,13 @@ const recEndDateInput = document.getElementById("recEndDate");
 const recEndCountInput = document.getElementById("recEndCount");
 const recDoneBtn = document.getElementById("recDoneBtn");
 const recCancelBtn = document.getElementById("recCancelBtn");
+const cancelModal = document.getElementById("cancelModal");
+const cancelModalText = document.getElementById("cancelModalText");
+const cancelOneBtn = document.getElementById("cancelOneBtn");
+const cancelAllBtn = document.getElementById("cancelAllBtn");
+const cancelBackBtn = document.getElementById("cancelBackBtn");
 let lastRecurrenceValue = "none";
+let pendingCancel = null;
 
 document.getElementById("date").valueAsDate = new Date();
 document.getElementById("startTime").value = "09:00";
@@ -67,6 +73,12 @@ recDoneBtn.addEventListener("click", applyCustomRecurrence);
 recCancelBtn.addEventListener("click", closeRecurrenceModal);
 recurrenceModal.addEventListener("click", (event) => {
   if (event.target === recurrenceModal) closeRecurrenceModal();
+});
+cancelOneBtn.addEventListener("click", () => runPendingCancel("one"));
+cancelAllBtn.addEventListener("click", () => runPendingCancel("all"));
+cancelBackBtn.addEventListener("click", closeCancelModal);
+cancelModal.addEventListener("click", (event) => {
+  if (event.target === cancelModal) closeCancelModal();
 });
 
 document.querySelectorAll("[data-view]").forEach((button) => {
@@ -135,24 +147,22 @@ form.addEventListener("submit", async (event) => {
   await refreshBookings();
 });
 
-calendar.addEventListener("click", async (event) => {
+calendar.addEventListener("click", (event) => {
   const button = event.target.closest("[data-delete]");
   if (!button) return;
-  const knownCode = getRememberedCancelCode(button.dataset.delete);
-  const cancelCode = knownCode || window.prompt("Digite o codigo de cancelamento desta reserva:");
+  const id = button.dataset.delete;
+  const booking = state.bookings.find((b) => String(b.id) === String(id));
+  const seriesId = booking && booking.series_id ? booking.series_id : null;
+  const seriesCount = seriesId ? state.bookings.filter((b) => b.series_id === seriesId).length : 0;
 
-  if (!cancelCode) {
-    showMessage("Cancelamento interrompido. Informe o codigo para cancelar.");
+  if (seriesId && seriesCount > 1) {
+    pendingCancel = { id, seriesId };
+    cancelModalText.textContent = `Este agendamento se repete (${seriesCount} ocorrências). O que você quer cancelar?`;
+    cancelAllBtn.textContent = `Toda a recorrência (${seriesCount})`;
+    cancelModal.hidden = false;
     return;
   }
-
-  try {
-    await deleteBooking(button.dataset.delete, cancelCode);
-    forgetCancelCode(button.dataset.delete);
-    await refreshBookings();
-  } catch (error) {
-    showMessage(`Nao foi possivel cancelar. Verifique o codigo informado.`);
-  }
+  performCancel(id, "one", null);
 });
 
 setInterval(updateRoomStatus, 30000);
@@ -367,7 +377,7 @@ async function refreshBookings(showErrors = true) {
 }
 
 async function listBookings() {
-  return supabaseRequest(`/${TABLE_NAME}?select=id,owner,reason,date,start,end,created_at&order=start.asc`);
+  return supabaseRequest(`/${TABLE_NAME}?select=id,owner,reason,date,start,end,created_at,series_id&order=start.asc`);
 }
 
 async function createBooking(booking) {
@@ -380,6 +390,7 @@ async function createBooking(booking) {
       p_start: booking.start,
       p_end: booking.end,
       p_cancel_code: booking.cancelCode,
+      p_series_id: booking.seriesId || null,
     }),
   });
 }
@@ -391,6 +402,25 @@ async function deleteBooking(id, cancelCode) {
       p_id: id,
       p_cancel_code: cancelCode,
     }),
+  });
+}
+
+async function cancelSeries(seriesId, cancelCode) {
+  return supabaseRpc("cancel_meeting_series", {
+    method: "POST",
+    body: JSON.stringify({
+      p_series_id: seriesId,
+      p_cancel_code: cancelCode,
+    }),
+  });
+}
+
+function makeUuid() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
   });
 }
 
@@ -689,6 +719,7 @@ async function createRecurringBookings(data, cancelCode) {
     return;
   }
 
+  const seriesId = occurrences.length > 1 ? makeUuid() : null;
   let created = 0;
   const failed = [];
   for (const dateStr of occurrences) {
@@ -703,6 +734,7 @@ async function createRecurringBookings(data, cancelCode) {
         end: end.toISOString(),
         createdAt: new Date().toISOString(),
         cancelCode,
+        seriesId,
       });
       rememberCancelCode(row.id, cancelCode);
       created += 1;
@@ -807,4 +839,40 @@ function todayStr() {
 function formatDateBR(dateStr) {
   const [, m, d] = dateStr.split("-");
   return `${d}/${m}`;
+}
+
+function closeCancelModal() {
+  cancelModal.hidden = true;
+  pendingCancel = null;
+}
+
+function runPendingCancel(scope) {
+  const target = pendingCancel;
+  cancelModal.hidden = true;
+  pendingCancel = null;
+  if (target) performCancel(target.id, scope, target.seriesId);
+}
+
+async function performCancel(id, scope, seriesId) {
+  const knownCode = getRememberedCancelCode(id);
+  const cancelCode = knownCode || window.prompt("Digite o codigo de cancelamento:");
+  if (!cancelCode) {
+    showMessage("Cancelamento interrompido. Informe o codigo para cancelar.");
+    return;
+  }
+  try {
+    if (scope === "all" && seriesId) {
+      const count = await cancelSeries(seriesId, cancelCode);
+      state.bookings
+        .filter((b) => b.series_id === seriesId)
+        .forEach((b) => forgetCancelCode(b.id));
+      showMessage(`${count} reserva(s) da recorrencia cancelada(s).`, true);
+    } else {
+      await deleteBooking(id, cancelCode);
+      forgetCancelCode(id);
+    }
+    await refreshBookings();
+  } catch (error) {
+    showMessage("Nao foi possivel cancelar. Verifique o codigo informado.");
+  }
 }

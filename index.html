@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Reserva de Sala de Reuniões</title>
-    <link rel="stylesheet" href="./styles.css?v=2" />
+    <link rel="stylesheet" href="./styles.css?v=3" />
   </head>
   <body>
     <header class="topbar">
@@ -184,6 +184,18 @@
       </div>
     </div>
 
+    <div class="modal-overlay" id="cancelModal" hidden>
+      <div class="modal-card modal-card-sm" role="dialog" aria-modal="true" aria-labelledby="cancelTitle">
+        <h2 id="cancelTitle">Cancelar agendamento recorrente</h2>
+        <p id="cancelModalText">Este agendamento faz parte de uma repetição.</p>
+        <div class="cancel-choices">
+          <button type="button" class="primary-button" id="cancelOneBtn">Somente este evento</button>
+          <button type="button" class="secondary-button" id="cancelAllBtn">Toda a recorrência</button>
+          <button type="button" class="link-button" id="cancelBackBtn">Voltar</button>
+        </div>
+      </div>
+    </div>
+
     <template id="bookingTemplate">
       <article class="booking-card">
         <strong></strong>
@@ -192,7 +204,7 @@
       </article>
     </template>
 
-    <script src="./config.js?v=2"></script>
-    <script src="./app.js?v=2"></script>
+    <script src="./config.js?v=3"></script>
+    <script src="./app.js?v=3"></script>
   </body>
 </html>

@@ -738,3 +738,22 @@ input:focus {
 .rec-actions .primary-button {
   padding: 0 22px;
 }
+
+.modal-card-sm {
+  width: min(380px, 100%);
+}
+
+#cancelModalText {
+  margin: 0 0 6px;
+  color: var(--muted);
+}
+
+.cancel-choices {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.cancel-choices button {
+  width: 100%;
+}

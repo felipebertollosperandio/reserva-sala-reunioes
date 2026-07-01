@@ -19,13 +19,18 @@ create table if not exists public.meeting_room_reservations (
 alter table public.meeting_room_reservations
 add column if not exists cancel_code_hash text;
 
+alter table public.meeting_room_reservations
+add column if not exists series_id uuid;
+
 alter table public.meeting_room_reservations enable row level security;
 
 drop policy if exists "Agenda publica para leitura" on public.meeting_room_reservations;
 drop policy if exists "Agenda publica para criacao" on public.meeting_room_reservations;
 drop policy if exists "Agenda publica para cancelamento" on public.meeting_room_reservations;
 drop function if exists public.create_meeting_reservation(text, text, date, timestamptz, timestamptz, text);
+drop function if exists public.create_meeting_reservation(text, text, date, timestamptz, timestamptz, text, uuid);
 drop function if exists public.cancel_meeting_reservation(uuid, text);
+drop function if exists public.cancel_meeting_series(uuid, text);
 
 create policy "Agenda publica para leitura"
 on public.meeting_room_reservations
@@ -43,7 +48,8 @@ grant select (
   date,
   start,
   "end",
-  created_at
+  created_at,
+  series_id
 ) on public.meeting_room_reservations to anon;
 
 grant select (
@@ -53,7 +59,8 @@ grant select (
   date,
   start,
   "end",
-  created_at
+  created_at,
+  series_id
 ) on public.meeting_room_reservations to authenticated;
 
 create or replace function public.create_meeting_reservation(
@@ -62,7 +69,8 @@ create or replace function public.create_meeting_reservation(
   p_date date,
   p_start timestamptz,
   p_end timestamptz,
-  p_cancel_code text
+  p_cancel_code text,
+  p_series_id uuid default null
 )
 returns table (
   id uuid,
@@ -71,7 +79,8 @@ returns table (
   date date,
   start timestamptz,
   "end" timestamptz,
-  created_at timestamptz
+  created_at timestamptz,
+  series_id uuid
 )
 language plpgsql
 security definer
@@ -93,7 +102,8 @@ begin
     date,
     start,
     "end",
-    cancel_code_hash
+    cancel_code_hash,
+    series_id
   )
   values (
     trim(p_owner),
@@ -101,7 +111,8 @@ begin
     p_date,
     p_start,
     p_end,
-    crypt(p_cancel_code, gen_salt('bf'))
+    crypt(p_cancel_code, gen_salt('bf')),
+    p_series_id
   )
   returning
     meeting_room_reservations.id,
@@ -110,7 +121,8 @@ begin
     meeting_room_reservations.date,
     meeting_room_reservations.start,
     meeting_room_reservations."end",
-    meeting_room_reservations.created_at;
+    meeting_room_reservations.created_at,
+    meeting_room_reservations.series_id;
 end;
 $$;
 
@@ -140,5 +152,32 @@ begin
 end;
 $$;
 
-grant execute on function public.create_meeting_reservation(text, text, date, timestamptz, timestamptz, text) to anon;
+create or replace function public.cancel_meeting_series(
+  p_series_id uuid,
+  p_cancel_code text
+)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  deleted_count integer;
+begin
+  delete from public.meeting_room_reservations
+  where series_id = p_series_id
+    and cancel_code_hash = crypt(p_cancel_code, cancel_code_hash);
+
+  get diagnostics deleted_count = row_count;
+
+  if deleted_count = 0 then
+    raise exception 'Codigo de cancelamento invalido.';
+  end if;
+
+  return deleted_count;
+end;
+$$;
+
+grant execute on function public.create_meeting_reservation(text, text, date, timestamptz, timestamptz, text, uuid) to anon;
 grant execute on function public.cancel_meeting_reservation(uuid, text) to anon;
+grant execute on function public.cancel_meeting_series(uuid, text) to anon;
