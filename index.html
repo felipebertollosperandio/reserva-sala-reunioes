@@ -95,6 +95,17 @@
                 <button type="button" class="secondary-button" id="newCancelCode">Gerar</button>
               </div>
             </label>
+            <label>
+              Repetição
+              <select id="recurrenceSelect">
+                <option value="none" selected>Não se repete</option>
+                <option value="daily">Todos os dias</option>
+                <option value="weekly">Semanalmente</option>
+                <option value="monthly">Mensalmente</option>
+                <option value="yearly">Anualmente</option>
+                <option value="custom">Personalizado…</option>
+              </select>
+            </label>
             <p class="form-message" id="formMessage" role="status" aria-live="polite"></p>
             <button type="submit" class="primary-button">Agendar sala</button>
           </form>
@@ -128,6 +139,50 @@
         </aside>
       </section>
     </main>
+
+    <div class="modal-overlay" id="recurrenceModal" hidden>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="recTitle">
+        <h2 id="recTitle">Recorrência personalizada</h2>
+
+        <div class="rec-row">
+          <span class="rec-label">Repetir a cada:</span>
+          <input type="number" id="recInterval" min="1" value="1" inputmode="numeric" />
+          <select id="recUnit">
+            <option value="day">dia</option>
+            <option value="week" selected>semana</option>
+            <option value="month">mês</option>
+            <option value="year">ano</option>
+          </select>
+        </div>
+
+        <div class="rec-block" id="recWeekdaysBlock">
+          <span class="rec-label">Repetir:</span>
+          <div class="weekday-row" id="recWeekdays">
+            <button type="button" data-dow="0">D</button>
+            <button type="button" data-dow="1">S</button>
+            <button type="button" data-dow="2">T</button>
+            <button type="button" data-dow="3">Q</button>
+            <button type="button" data-dow="4">Q</button>
+            <button type="button" data-dow="5">S</button>
+            <button type="button" data-dow="6">S</button>
+          </div>
+        </div>
+
+        <div class="rec-block">
+          <span class="rec-label">Termina em</span>
+          <div class="rec-end">
+            <label class="rec-radio"><input type="radio" name="recEnd" value="never" checked /> Nunca</label>
+            <label class="rec-radio"><input type="radio" name="recEnd" value="on" /> Em <input type="date" id="recEndDate" /></label>
+            <label class="rec-radio"><input type="radio" name="recEnd" value="after" /> Após <input type="number" id="recEndCount" min="1" value="13" inputmode="numeric" /> ocorrências</label>
+          </div>
+        </div>
+
+        <div class="rec-actions">
+          <button type="button" class="link-button" id="recCancelBtn">Cancelar</button>
+          <button type="button" class="primary-button" id="recDoneBtn">Concluir</button>
+        </div>
+      </div>
+    </div>
 
     <template id="bookingTemplate">
       <article class="booking-card">

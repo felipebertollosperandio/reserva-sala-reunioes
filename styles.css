@@ -582,3 +582,159 @@ input:focus {
     min-height: 540px;
   }
 }
+
+/* Repeticao / recorrencia */
+#recurrenceSelect {
+  width: 100%;
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfffd;
+  color: var(--ink);
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 40, 28, 0.45);
+}
+
+.modal-overlay[hidden] {
+  display: none;
+}
+
+.modal-card {
+  width: min(440px, 100%);
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 22px 22px 18px;
+  background: var(--white);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+
+.modal-card h2 {
+  margin: 0 0 18px;
+  color: var(--green-900);
+  font-size: 20px;
+}
+
+.rec-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.rec-label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--green-900);
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.rec-row .rec-label {
+  margin-bottom: 0;
+}
+
+.rec-row input {
+  width: 68px;
+}
+
+.rec-row select {
+  width: auto;
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfffd;
+  color: var(--ink);
+}
+
+.rec-block {
+  margin-bottom: 18px;
+}
+
+.weekday-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.weekday-row button {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--white);
+  color: var(--green-900);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.weekday-row button.selected {
+  background: var(--green-800);
+  border-color: var(--green-800);
+  color: var(--white);
+}
+
+.rec-end {
+  display: grid;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.rec-radio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.rec-radio input[type="radio"] {
+  width: auto;
+  min-height: 0;
+  margin: 0;
+}
+
+.rec-radio input[type="date"],
+.rec-radio input[type="number"] {
+  width: auto;
+  min-height: 38px;
+  flex: 0 0 auto;
+}
+
+.rec-radio input[type="number"] {
+  width: 84px;
+}
+
+.rec-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.link-button {
+  border: 0;
+  background: transparent;
+  color: var(--green-800);
+  font-weight: 800;
+  cursor: pointer;
+  padding: 0 12px;
+}
+
+.rec-actions .primary-button {
+  padding: 0 22px;
+}

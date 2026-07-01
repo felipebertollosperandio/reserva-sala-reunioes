@@ -9,6 +9,7 @@ const state = {
   bookings: [],
   config: loadConfig(),
   online: false,
+  recurrence: null,
 };
 
 const calendar = document.getElementById("calendar");
@@ -29,6 +30,17 @@ const syncForm = document.getElementById("syncForm");
 const syncStatus = document.getElementById("syncStatus");
 const cancelCodeInput = document.getElementById("cancelCode");
 const newCancelCodeButton = document.getElementById("newCancelCode");
+const recurrenceSelect = document.getElementById("recurrenceSelect");
+const recurrenceModal = document.getElementById("recurrenceModal");
+const recInterval = document.getElementById("recInterval");
+const recUnit = document.getElementById("recUnit");
+const recWeekdaysBlock = document.getElementById("recWeekdaysBlock");
+const recWeekdays = document.getElementById("recWeekdays");
+const recEndDateInput = document.getElementById("recEndDate");
+const recEndCountInput = document.getElementById("recEndCount");
+const recDoneBtn = document.getElementById("recDoneBtn");
+const recCancelBtn = document.getElementById("recCancelBtn");
+let lastRecurrenceValue = "none";
 
 document.getElementById("date").valueAsDate = new Date();
 document.getElementById("startTime").value = "09:00";
@@ -43,6 +55,18 @@ syncButton.addEventListener("click", () => syncPanel.classList.toggle("open"));
 syncForm.addEventListener("submit", saveDatabaseConfig);
 newCancelCodeButton.addEventListener("click", () => {
   cancelCodeInput.value = generateCancelCode();
+});
+
+recurrenceSelect.addEventListener("change", handleRecurrenceSelect);
+recUnit.addEventListener("change", updateRecWeekdaysVisibility);
+recWeekdays.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-dow]");
+  if (button) button.classList.toggle("selected");
+});
+recDoneBtn.addEventListener("click", applyCustomRecurrence);
+recCancelBtn.addEventListener("click", closeRecurrenceModal);
+recurrenceModal.addEventListener("click", (event) => {
+  if (event.target === recurrenceModal) closeRecurrenceModal();
 });
 
 document.querySelectorAll("[data-view]").forEach((button) => {
@@ -79,6 +103,11 @@ form.addEventListener("submit", async (event) => {
 
   await refreshBookings(false);
 
+  if (state.recurrence) {
+    await createRecurringBookings(data, cancelCode);
+    return;
+  }
+
   const conflict = findConflict(data.date, start, end);
   if (conflict) {
     showMessage(`Conflito com ${conflict.owner}, das ${formatTime(conflict.start)} as ${formatTime(conflict.end)}.`);
@@ -97,15 +126,11 @@ form.addEventListener("submit", async (event) => {
     });
     rememberCancelCode(created.id, cancelCode);
   } catch (error) {
-    showMessage(`Nao foi possivel salvar no Supabase: ${cleanError(error.message)}`);
+    showMessage(`Nao foi possivel salvar: ${cleanError(error.message)}`);
     return;
   }
 
-  form.reset();
-  document.getElementById("date").value = data.date;
-  document.getElementById("startTime").value = data.endTime;
-  document.getElementById("endTime").value = addMinutes(data.endTime, 60);
-  cancelCodeInput.value = generateCancelCode();
+  resetBookingForm(data);
   showMessage(`Reserva criada. Guarde o codigo: ${cancelCode}`, true);
   await refreshBookings();
 });
@@ -573,4 +598,213 @@ function create(tag, className = "") {
   const node = document.createElement(tag);
   if (className) node.className = className;
   return node;
+}
+
+function handleRecurrenceSelect() {
+  const value = recurrenceSelect.value;
+  if (value === "custom") {
+    openRecurrenceModal();
+    return;
+  }
+  if (value === "none") {
+    state.recurrence = null;
+  } else {
+    const dow = parseYmd(dateValue()).getDay();
+    const presets = {
+      daily: { interval: 1, unit: "day", weekdays: [], end: { type: "never" } },
+      weekly: { interval: 1, unit: "week", weekdays: [dow], end: { type: "never" } },
+      monthly: { interval: 1, unit: "month", weekdays: [], end: { type: "never" } },
+      yearly: { interval: 1, unit: "year", weekdays: [], end: { type: "never" } },
+    };
+    state.recurrence = presets[value];
+  }
+  lastRecurrenceValue = value;
+}
+
+function openRecurrenceModal() {
+  const r = state.recurrence || {};
+  recInterval.value = r.interval || 1;
+  recUnit.value = r.unit && r.unit !== "none" ? r.unit : "week";
+  const defaultDow = parseYmd(dateValue()).getDay();
+  const selectedDays = r.weekdays && r.weekdays.length ? r.weekdays : [defaultDow];
+  recWeekdays.querySelectorAll("button[data-dow]").forEach((button) => {
+    button.classList.toggle("selected", selectedDays.includes(Number(button.dataset.dow)));
+  });
+  const end = r.end || { type: "never" };
+  const endRadio = recurrenceModal.querySelector(`input[name="recEnd"][value="${end.type}"]`);
+  if (endRadio) endRadio.checked = true;
+  recEndDateInput.value = end.type === "on" && end.date ? end.date : "";
+  recEndCountInput.value = end.type === "after" && end.count ? end.count : 13;
+  updateRecWeekdaysVisibility();
+  recurrenceModal.hidden = false;
+}
+
+function closeRecurrenceModal() {
+  recurrenceSelect.value = lastRecurrenceValue;
+  recurrenceModal.hidden = true;
+}
+
+function applyCustomRecurrence() {
+  const unit = recUnit.value;
+  const interval = Math.max(1, parseInt(recInterval.value, 10) || 1);
+  let weekdays = [];
+  if (unit === "week") {
+    weekdays = Array.from(recWeekdays.querySelectorAll("button.selected")).map((b) => Number(b.dataset.dow));
+    if (!weekdays.length) weekdays = [parseYmd(dateValue()).getDay()];
+  }
+  const checkedEnd = recurrenceModal.querySelector('input[name="recEnd"]:checked');
+  const endType = checkedEnd ? checkedEnd.value : "never";
+  const end = { type: endType };
+  if (endType === "on") end.date = recEndDateInput.value || "";
+  if (endType === "after") end.count = Math.max(1, parseInt(recEndCountInput.value, 10) || 1);
+
+  state.recurrence = { interval, unit, weekdays, end };
+  const customOption = recurrenceSelect.querySelector('option[value="custom"]');
+  if (customOption) customOption.textContent = "Personalizado: " + recurrenceSummary(state.recurrence);
+  recurrenceSelect.value = "custom";
+  lastRecurrenceValue = "custom";
+  recurrenceModal.hidden = true;
+}
+
+function updateRecWeekdaysVisibility() {
+  recWeekdaysBlock.style.display = recUnit.value === "week" ? "" : "none";
+}
+
+function recurrenceSummary(r) {
+  const units = { day: "dia", week: "semana", month: "mes", year: "ano" };
+  let text = `a cada ${r.interval} ${units[r.unit]}${r.interval > 1 ? "s" : ""}`;
+  if (r.unit === "week" && r.weekdays.length) {
+    const names = ["dom", "seg", "ter", "qua", "qui", "sex", "sab"];
+    text += " (" + r.weekdays.slice().sort((a, b) => a - b).map((d) => names[d]).join(", ") + ")";
+  }
+  if (r.end.type === "on" && r.end.date) text += `, ate ${formatDateBR(r.end.date)}`;
+  else if (r.end.type === "after") text += `, ${r.end.count}x`;
+  return text;
+}
+
+async function createRecurringBookings(data, cancelCode) {
+  const occurrences = computeOccurrences(data.date, state.recurrence);
+  if (!occurrences.length) {
+    showMessage("A repeticao nao gerou nenhuma data valida.");
+    return;
+  }
+
+  let created = 0;
+  const failed = [];
+  for (const dateStr of occurrences) {
+    const start = new Date(`${dateStr}T${data.startTime}`);
+    const end = new Date(`${dateStr}T${data.endTime}`);
+    try {
+      const row = await createBooking({
+        owner: data.owner.trim(),
+        reason: data.reason.trim(),
+        date: dateStr,
+        start: start.toISOString(),
+        end: end.toISOString(),
+        createdAt: new Date().toISOString(),
+        cancelCode,
+      });
+      rememberCancelCode(row.id, cancelCode);
+      created += 1;
+    } catch (error) {
+      failed.push(dateStr);
+    }
+  }
+
+  resetBookingForm(data);
+  if (created === 0) {
+    showMessage(`Nenhuma reserva criada. As ${failed.length} datas tinham conflito de horario.`);
+  } else {
+    let message = `${created} reserva(s) criada(s). Guarde o codigo: ${cancelCode}.`;
+    if (failed.length) {
+      const list = failed.slice(0, 4).map(formatDateBR).join(", ");
+      message += ` ${failed.length} pulada(s) por conflito (${list}${failed.length > 4 ? "..." : ""}).`;
+    }
+    showMessage(message, true);
+  }
+  await refreshBookings();
+}
+
+function computeOccurrences(baseDateStr, rule) {
+  const MAX = 60;
+  const base = parseYmd(baseDateStr);
+  const endType = (rule.end && rule.end.type) || "never";
+  const endDate = endType === "on" && rule.end.date ? parseYmd(rule.end.date) : null;
+  const targetCount = endType === "after" ? Math.max(1, rule.end.count || 1) : MAX;
+  const horizon = new Date(base);
+  horizon.setFullYear(horizon.getFullYear() + 1);
+  const out = [];
+
+  const withinLimits = (d) => {
+    if (out.length >= (endType === "after" ? targetCount : MAX)) return false;
+    if (endType === "on" && endDate && d > endDate) return false;
+    if (endType === "never" && d > horizon) return false;
+    return true;
+  };
+
+  if (rule.unit === "week") {
+    const days = rule.weekdays && rule.weekdays.length ? rule.weekdays.slice().sort((a, b) => a - b) : [base.getDay()];
+    const weekStart = new Date(base);
+    weekStart.setDate(base.getDate() - base.getDay());
+    let done = false;
+    while (!done) {
+      for (const dow of days) {
+        const d = new Date(weekStart);
+        d.setDate(weekStart.getDate() + dow);
+        if (d < base) continue;
+        if (!withinLimits(d)) {
+          done = true;
+          break;
+        }
+        out.push(ymd(d));
+      }
+      if (done) break;
+      weekStart.setDate(weekStart.getDate() + 7 * rule.interval);
+      if (out.length >= MAX) break;
+    }
+  } else {
+    const d = new Date(base);
+    let guard = 0;
+    while (guard++ < 1200) {
+      if (!withinLimits(d)) break;
+      out.push(ymd(d));
+      if (rule.unit === "month") d.setMonth(d.getMonth() + rule.interval);
+      else if (rule.unit === "year") d.setFullYear(d.getFullYear() + rule.interval);
+      else d.setDate(d.getDate() + rule.interval);
+    }
+  }
+  return out;
+}
+
+function resetBookingForm(data) {
+  form.reset();
+  document.getElementById("date").value = data.date;
+  document.getElementById("startTime").value = data.endTime;
+  document.getElementById("endTime").value = addMinutes(data.endTime, 60);
+  cancelCodeInput.value = generateCancelCode();
+  state.recurrence = null;
+  lastRecurrenceValue = "none";
+  recurrenceSelect.value = "none";
+}
+
+function dateValue() {
+  return document.getElementById("date").value || todayStr();
+}
+
+function parseYmd(value) {
+  const [y, m, d] = String(value).split("-").map(Number);
+  return new Date(y, (m || 1) - 1, d || 1, 12, 0, 0, 0);
+}
+
+function ymd(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function todayStr() {
+  return ymd(new Date());
+}
+
+function formatDateBR(dateStr) {
+  const [, m, d] = dateStr.split("-");
+  return `${d}/${m}`;
 }
