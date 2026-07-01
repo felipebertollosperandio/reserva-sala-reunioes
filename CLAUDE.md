@@ -8,7 +8,9 @@ Site de **reserva de sala de reuniões** para uso interno da empresa. Página ú
 (HTML/CSS/JS puro, sem build, sem framework), pensada inclusive para ser **embutida numa página do
 Notion** via `/embed` (por isso precisa de URL HTTPS pública). **Não tem login** — por design,
 qualquer pessoa com o link cria e cancela reservas. O controle de cancelamento é por um **código
-por reserva** (guardado como hash bcrypt no banco; nunca aparece na agenda).
+por reserva** (guardado como hash bcrypt no banco; nunca aparece na agenda). Suporta **recorrência**
+(repetir por dia/semana/mês/ano): cada ocorrência é uma reserva independente agrupada por um
+`series_id`, o que permite cancelar **só aquela** ou **a série inteira**.
 
 ## Commands
 
@@ -19,17 +21,23 @@ Não há build, testes automatizados, linter nem gerenciador de pacotes — é H
   (o `app.js` cai em dados de exemplo). Serve para mexer no visual, não para dados reais.
 - **Publicar edições:** commit + push no GitHub, depois `ssh root@187.77.192.56 atualizar-reserva`
   (faz `git pull` + ajusta permissões em `/var/www/reserva`). Só editar local não atualiza o site.
-- **Alterar o banco:** editar `supabase-schema.sql` e aplicar no VPS com
-  `sudo -u postgres psql -d reservas -f /var/www/reserva/supabase-schema.sql`.
+- **Alterar o banco:** editar `supabase-schema.sql`, aplicar no VPS com
+  `sudo -u postgres psql -d reservas -f /var/www/reserva/supabase-schema.sql` e depois
+  `systemctl restart postgrest` (para o PostgREST recarregar o cache do schema — colunas/funções novas).
 - **Validar o backend sem navegador:** `curl` contra `https://reserva.hsseminovos.com.br/rest/v1`
   com a chave de `config.js` em `apikey` + `Authorization: Bearer` (`GET` para ler,
-  `POST /rpc/create_meeting_reservation`, `POST /rpc/cancel_meeting_reservation`).
+  `POST /rpc/create_meeting_reservation`, `.../cancel_meeting_reservation`, `.../cancel_meeting_series`).
 
 ## Arquitetura
 
 **Frontend** (`index.html`, `styles.css`, `app.js`): renderiza calendário semana/mês + dashboard e
-fala com uma API REST em `/rest/v1`. `app.js` usa dois endpoints além do GET: as funções RPC
-`create_meeting_reservation` e `cancel_meeting_reservation`.
+fala com uma API REST em `/rest/v1`. Endpoints: `GET` na tabela e as funções RPC
+`create_meeting_reservation`, `cancel_meeting_reservation` e `cancel_meeting_series`.
+- A **visão semana** (`renderWeek`) é uma grade de horários estilo agenda: eixo de horas + linhas por
+  hora; eventos posicionados por horário (`top`/`height` em px via `HOUR_HEIGHT`), abre rolada em 07:00.
+- **Recorrência:** `computeOccurrences` expande a regra em datas e o `app.js` cria **uma reserva por
+  ocorrência** (chamadas sequenciais), todas com o mesmo código e um `series_id` compartilhado. Cancelar
+  oferece "somente este" (`cancel_meeting_reservation`) ou "toda a série" (`cancel_meeting_series`).
 
 **Configuração** (`config.js`): define `window.RESERVA_DB` com `supabaseUrl` e `supabaseKey`.
 - ⚠️ Os nomes `supabase*` são **legado**: o backend hoje é **próprio** (ver abaixo), não o Supabase.
@@ -48,6 +56,8 @@ isso o `app.js` quase não mudou):
   (nunca `cancel_code_hash`); o código é gravado como `crypt(code, gen_salt('bf'))` e o cancelamento
   só apaga se `crypt` bater. Há uma **exclusion constraint global** (`no_time_overlap`): duas reservas
   não podem se sobrepor no tempo (modelo de sala única) — conflito vira erro do banco.
+- **Séries:** coluna `series_id` agrupa as ocorrências de uma recorrência; `cancel_meeting_series(series_id, code)`
+  apaga todas as reservas da série cujo código bate. Depois de aplicar mudança de schema, reiniciar o PostgREST.
 
 ## Infra e operação
 
@@ -56,6 +66,8 @@ isso o `app.js` quase não mudou):
 - DNS no **Registro.br**: registro A `reserva` → `187.77.192.56`.
 - **Backup:** `/usr/local/bin/backup-reservas` roda diariamente às 03:30 (`/etc/cron.d/reservas-backup`),
   gerando `pg_dump -Fc` em `/var/backups/reservas/` (mantém os 14 mais recentes; restaurar com `pg_restore`).
+- **Cache:** o nginx envia `Cache-Control: no-cache` nos estáticos (revalidação a cada load) e o
+  `index.html` referencia os assets com `?v=N`; ao mudar `app.js`/`styles.css`, incrementar `?v=` garante versão nova.
 
 ## ⚠️ Não quebrar (mesmo VPS)
 
