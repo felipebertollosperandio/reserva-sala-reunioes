@@ -1,67 +1,64 @@
 # CLAUDE.md
 
-Guia para trabalhar neste repositório.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## O que é
 
-Site de **reserva de sala de reuniões** para uso interno da empresa. Página única,
-**estática** (HTML/CSS/JS puro, sem build, sem framework). **Não tem login** — por design,
-qualquer pessoa da empresa acessa, cria e cancela reservas. O controle de cancelamento é por
-um **código de cancelamento** por reserva (guardado como hash bcrypt no banco).
+Site de **reserva de sala de reuniões** para uso interno da empresa. Página única, **estática**
+(HTML/CSS/JS puro, sem build, sem framework), pensada inclusive para ser **embutida numa página do
+Notion** via `/embed` (por isso precisa de URL HTTPS pública). **Não tem login** — por design,
+qualquer pessoa com o link cria e cancela reservas. O controle de cancelamento é por um **código
+por reserva** (guardado como hash bcrypt no banco; nunca aparece na agenda).
 
-## Arquivos
+## Commands
 
-- `index.html` — estrutura da página (formulário de reserva, calendário semana/mês, dashboard).
-- `styles.css` — estilos.
-- `app.js` — toda a lógica: renderização do calendário e chamadas à API REST (`/rest/v1`).
-- `config.js` — `window.RESERVA_DB` com `supabaseUrl` e `supabaseKey`.
-  ⚠️ Os nomes `supabase*` são **legado**: hoje o backend é **próprio** (ver abaixo), não o Supabase.
-  `supabaseUrl` aponta para o próprio domínio e `supabaseKey` é um JWT de role `anon`.
-- `supabase-schema.sql` — esquema do banco (tabela, RLS, funções). No self-host, exige criar antes
-  os roles `anon`, `authenticated` e `authenticator`.
+Não há build, testes automatizados, linter nem gerenciador de pacotes — é HTML/CSS/JS vanilla.
 
-## Backend (auto-hospedado no VPS)
+- **Preview local (UI):** `python3 -m http.server 8000` na raiz e abrir http://localhost:8000.
+  Atenção: a API é **same-origin (sem CORS)**, então rodando localmente a agenda real **não carrega**
+  (o `app.js` cai em dados de exemplo). Serve para mexer no visual, não para dados reais.
+- **Publicar edições:** commit + push no GitHub, depois `ssh root@187.77.192.56 atualizar-reserva`
+  (faz `git pull` + ajusta permissões em `/var/www/reserva`). Só editar local não atualiza o site.
+- **Alterar o banco:** editar `supabase-schema.sql` e aplicar no VPS com
+  `sudo -u postgres psql -d reservas -f /var/www/reserva/supabase-schema.sql`.
+- **Validar o backend sem navegador:** `curl` contra `https://reserva.hsseminovos.com.br/rest/v1`
+  com a chave de `config.js` em `apikey` + `Authorization: Bearer` (`GET` para ler,
+  `POST /rpc/create_meeting_reservation`, `POST /rpc/cancel_meeting_reservation`).
 
-O backend roda **no próprio VPS** (migrado do Supabase em jun/2026). Mesma tecnologia que o
-Supabase usa por baixo, então o `app.js` praticamente não mudou:
+## Arquitetura
 
-- **PostgreSQL** (banco `reservas`) + **PostgREST** (gera a API REST), serviço systemd `postgrest`
-  escutando em `127.0.0.1:3000`.
-- **nginx** serve o site estático em `/` e faz proxy de `/rest/v1/` → PostgREST (mesmo domínio/HTTPS).
-- Segredos (senha do banco, jwt-secret, JWT anon) em `/root/reserva-backend-secrets` (no servidor).
+**Frontend** (`index.html`, `styles.css`, `app.js`): renderiza calendário semana/mês + dashboard e
+fala com uma API REST em `/rest/v1`. `app.js` usa dois endpoints além do GET: as funções RPC
+`create_meeting_reservation` e `cancel_meeting_reservation`.
 
-Endpoints que o `app.js` usa:
-- **Ler:** `GET /rest/v1/meeting_room_reservations?select=...` — RLS ativo; `anon` só lê colunas não
-  sensíveis (nunca o `cancel_code_hash`).
-- **Criar:** `POST /rest/v1/rpc/create_meeting_reservation` (função `security definer`). Grava o código
-  de cancelamento como **hash bcrypt** (`crypt(code, gen_salt('bf'))`), nunca em texto puro.
-- **Cancelar:** `POST /rest/v1/rpc/cancel_meeting_reservation` — só apaga se o código bater com o hash.
+**Configuração** (`config.js`): define `window.RESERVA_DB` com `supabaseUrl` e `supabaseKey`.
+- ⚠️ Os nomes `supabase*` são **legado**: o backend hoje é **próprio** (ver abaixo), não o Supabase.
+  `supabaseUrl` aponta para o próprio domínio; `supabaseKey` é um JWT de role `anon`.
+- ⚠️ **Pegadinha:** o painel "Configurar banco" da tela salva URL/chave no `localStorage`, e o
+  `loadConfig()` do `app.js` faz o valor salvo **ter prioridade sobre o `config.js`**. Se um navegador
+  tem uma config antiga salva, ele ignora o `config.js` novo. Ao trocar de backend, limpar o
+  `localStorage` do navegador afetado resolve.
 
-Detalhe do schema: há uma **exclusion constraint global** (`no_time_overlap`) — duas reservas não
-podem se sobrepor no tempo (modelo de sala única); conflito → erro do banco.
+**Backend auto-hospedado no VPS** (migrado do Supabase em jun/2026 — mesma tecnologia por baixo, por
+isso o `app.js` quase não mudou):
+- **PostgreSQL** (banco `reservas`) + **PostgREST** (serviço systemd `postgrest`, em `127.0.0.1:3000`).
+- **nginx** serve o estático em `/` e faz proxy de `/rest/v1/` → PostgREST (mesmo domínio/HTTPS).
+- Segredos (senha do banco, jwt-secret, JWT anon) em `/root/reserva-backend-secrets` no servidor.
+- Segurança do cancelamento: RLS + funções `security definer`; `anon` só lê colunas não sensíveis
+  (nunca `cancel_code_hash`); o código é gravado como `crypt(code, gen_salt('bf'))` e o cancelamento
+  só apaga se `crypt` bater. Há uma **exclusion constraint global** (`no_time_overlap`): duas reservas
+  não podem se sobrepor no tempo (modelo de sala única) — conflito vira erro do banco.
 
-## Implantação e operação (produção)
+## Infra e operação
 
-- Publicado em **https://reserva.hsseminovos.com.br** (cadeado Let's Encrypt, renovação automática).
+- Produção: **https://reserva.hsseminovos.com.br** (Let's Encrypt, renovação automática).
 - **VPS Hostinger** `187.77.192.56` (Ubuntu 24.04). Site em `/var/www/reserva` (clone deste repo).
 - DNS no **Registro.br**: registro A `reserva` → `187.77.192.56`.
-- **Backup:** `/usr/local/bin/backup-reservas` (pg_dump diário 03:30 via `/etc/cron.d/reservas-backup`)
-  → `/var/backups/reservas/` (mantém os últimos 14). Restaurar com `pg_restore`.
-
-### Publicar edições
-1. Commit + push para o GitHub (`github.com/felipebertollosperandio/reserva-sala-reunioes`).
-2. `ssh root@187.77.192.56 atualizar-reserva` — faz `git pull` + ajusta permissões.
-
-Editar só localmente **não** atualiza o site; precisa passar pelo GitHub + o comando acima.
+- **Backup:** `/usr/local/bin/backup-reservas` roda diariamente às 03:30 (`/etc/cron.d/reservas-backup`),
+  gerando `pg_dump -Fc` em `/var/backups/reservas/` (mantém os 14 mais recentes; restaurar com `pg_restore`).
 
 ## ⚠️ Não quebrar (mesmo VPS)
 
 - **market-research** — `/root/market-research`, cron semanal (`0 8 * * 1`). Não usa portas web.
 - **fotos-bot** — `fotos-bot.service`, em `/opt/fotos-slack-notion`. Não usa portas web.
 - E-mail do domínio é **Microsoft 365**; os registros DNS `MX`/`TXT`/`CNAME` (outlook) não devem ser alterados.
-
-## Validar o backend sem navegador
-
-`curl` contra `https://reserva.hsseminovos.com.br/rest/v1` com a chave de `config.js` em `apikey` +
-`Authorization: Bearer`: `GET` para ler, `POST /rpc/create_meeting_reservation` e
-`POST /rpc/cancel_meeting_reservation`. Usar horário no futuro distante e cancelar no fim.
