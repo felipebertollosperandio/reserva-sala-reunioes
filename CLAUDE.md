@@ -24,7 +24,7 @@ Não há build, testes automatizados, linter nem gerenciador de pacotes — é H
 - **Alterar o banco:** editar `supabase-schema.sql`, aplicar no VPS com
   `sudo -u postgres psql -d reservas -f /var/www/reserva/supabase-schema.sql` e depois
   `systemctl restart postgrest` (para o PostgREST recarregar o cache do schema — colunas/funções novas).
-- **Validar o backend sem navegador:** `curl` contra `https://reserva.hsseminovos.com.br/rest/v1`
+- **Validar o backend sem navegador:** `curl` contra `https://reserva.autolocadorahs.com.br/rest/v1`
   com a chave de `config.js` em `apikey` + `Authorization: Bearer` (`GET` para ler,
   `POST /rpc/create_meeting_reservation`, `.../cancel_meeting_reservation`, `.../cancel_meeting_series`).
 
@@ -61,9 +61,12 @@ isso o `app.js` quase não mudou):
 
 ## Infra e operação
 
-- Produção: **https://reserva.hsseminovos.com.br** (Let's Encrypt, renovação automática).
+- Produção: **https://reserva.autolocadorahs.com.br** (Let's Encrypt, renovação automática).
+  Migrado de `reserva.hsseminovos.com.br` em jul/2026; o domínio antigo foi **abandonado** (sem redirect).
 - **VPS Hostinger** `187.77.192.56` (Ubuntu 24.04). Site em `/var/www/reserva` (clone deste repo).
-- DNS no **Registro.br**: registro A `reserva` → `187.77.192.56`.
+- DNS no **Registro.br** (domínio `autolocadorahs.com.br`): registro A `reserva` → `187.77.192.56`.
+  ⚠️ Domínio diferente do e-mail: `autolocadorahs.com.br` tem DNS no Registro.br; o antigo
+  `hsseminovos.com.br` foi migrado para o **Cloudflare** (NS `aisha`/`vicky.ns.cloudflare.com`).
 - **Backup:** `/usr/local/bin/backup-reservas` roda diariamente às 03:30 (`/etc/cron.d/reservas-backup`),
   gerando `pg_dump -Fc` em `/var/backups/reservas/` (mantém os 14 mais recentes; restaurar com `pg_restore`).
 - **Cache:** o nginx envia `Cache-Control: no-cache` nos estáticos (revalidação a cada load) e o
